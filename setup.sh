@@ -1,58 +1,78 @@
 #!/bin/bash -e
 
-# == update to 17.04 if required:
+# == Update to 17.04 if required:
 # nano /etc/update-manager/release-upgrades -> Prompt=normal
 # apt-get update
 # do-release-upgrade
 
-# == then run this script
+# == Then run this script
 # wget https://raw.githubusercontent.com/jawj/IKEv2-setup/master/setup.sh
 # chmod u+x setup.sh
-# ./setup.sh
+# ./setup.sh
+LOCALIP="172.104.82.82"
+VPNHOST=$LOCALIP
+VPNHOSTIP = $LOCALIP
 
 echo
-echo "=== Requesting configuration data ==="
+echo "=== https://github.com/jawj/IKEv2-setup ==="
 echo
 
-read -p "Timezone (default: Europe/London): " TZONE
-TZONE=${TZONE:-'Europe/London'}
+function exit_badly {
+  echo $1
+  exit 1
+}
 
-read -p "Email address for sysadmin (e.g. j.bloggs@example.com): " EMAIL
+[[ $(id -u) -eq 0 ]] || exit_badly "请以root用户运行此脚本 (e.g. sudo ./path/to/this/script)"
 
-read -p "Port for SSH login (default: 22): " SSHPORT
-SSHPORT=${SSHPORT:-22}
-
+echo "--- 配置: VPN 设置 ---"
 echo
 
-read -p "Login username: " LOGINUSERNAME
+
+
+read -p "VPN 用户名: " VPNUSERNAME
 while true; do
-  read -s -p "Login password (must be STRONG!): " LOGINPASSWORD
-  echo
-  read -s -p "Confirm login password: " LOGINPASSWORD2
-  echo
-  [ "$LOGINPASSWORD" = "$LOGINPASSWORD2" ] && break
-  echo "Passwords didn't match -- please try again"
-done
-echo
-
-echo "** Hostname for VPN must ALREADY resolve to this machine, to enable Let's Encrypt certificate setup **"
-read -p "Hostname for VPN (e.g. vpn.example.com): " VPNHOST
-
-read -p "VPN username: " VPNUSERNAME
-while true; do
-read -s -p "VPN password (no quotes, please): " VPNPASSWORD
+read -s -p "VPN 密码 (no quotes, please): " VPNPASSWORD
 echo
 read -s -p "Confirm VPN password: " VPNPASSWORD2
 echo
 [ "$VPNPASSWORD" = "$VPNPASSWORD2" ] && break
-echo "Passwords didn't match -- please try again"
+echo "两次输入密码不一致 -- 请重试"
 done
+
+echo
+echo "--- 配置: 通用服务器设置 ---"
+echo
+
+read -p "时区 (默认: Asia/Hong_Kong): " TZONE
+TZONE=${TZONE:-'Asia/Hong_Kong'}
+
+read -p "系统管理员邮箱 (默认 stonexing5@gmail.com): " EMAIL
+EMAIL=${EMAIL:-'stonexing5@gmail.com'}
+
+echo
+
+read -p "SSH 登录端口 (默认: 22): " SSHPORT
+SSHPORT=${SSHPORT:-22}
+
+read -p "SSH 登录用户名: " LOGINUSERNAME
+while true; do
+  read -s -p "SSH 登录密码 (must be REALLY STRONG): " LOGINPASSWORD
+  echo
+  read -s -p "确认SSH 登录密码: " LOGINPASSWORD2
+  echo
+  [ "$LOGINPASSWORD" = "$LOGINPASSWORD2" ] && break
+  echo "SSH 登录密码两次输入不一致 -- 请重试"
+done
+
+if ["root" = "$LOGINUSERNAME"]; then
+  mkdir /home/root
+fi
 
 VPNIPPOOL="10.10.10.0/24"
 
 
 echo
-echo "=== Updating and installing software ==="
+echo "--- 升级和安装软件 ---"
 echo
 
 export DEBIAN_FRONTEND=noninteractive
@@ -61,7 +81,8 @@ apt-get update && apt-get upgrade -y
 debconf-set-selections <<< "postfix postfix/mailname string ${VPNHOST}"
 debconf-set-selections <<< "postfix postfix/main_mailer_type string 'Internet Site'"
 
-apt-get install -y language-pack-en strongswan libcharon-extra-plugins moreutils iptables-persistent postfix mailutils unattended-upgrades certbot
+apt-get install -y language-pack-en strongswan strongswan-ikev2 libstrongswan-standard-plugins strongswan-libcharon libcharon-standard-plugins libcharon-extra-plugins moreutils iptables-persistent postfix mailutils unattended-upgrades certbot
+
 
 
 ETH0ORSIMILAR=$(ip route get 8.8.8.8 | awk -- '{printf $5}')
@@ -71,9 +92,14 @@ echo
 echo "Network interface: ${ETH0ORSIMILAR}"
 echo "External IP: ${IP}"
 
+if [[ "$IP" != "$VPNHOSTIP" ]]; then
+  echo "请注意: $VPNHOST 指向的地址 $VPNHOSTIP, 不知本机设置中的地址 $IP"
+  echo "Either you are behind NAT, or something is wrong (e.g. hostname points to wrong IP, CloudFlare proxying shenanigans, ...)"
+  read -p "按 [Return] 继续, 或按 Ctrl-C 中断" DUMMYVAR
+fi
 
 echo
-echo "=== Configuring firewall ==="
+echo "--- 配置防火墙 ---"
 echo
 
 # firewall
@@ -139,7 +165,7 @@ dpkg-reconfigure iptables-persistent
 
 
 echo
-echo "=== Configuring RSA certificates ==="
+echo "--- 配置 RSA 证书 ---"
 echo
 
 mkdir -p /etc/letsencrypt
@@ -152,29 +178,33 @@ renew-hook = /usr/sbin/ipsec reload && /usr/sbin/ipsec secrets
 
 certbot certonly --non-interactive --agree-tos --email $EMAIL --standalone -d $VPNHOST
 
-ln -s /etc/letsencrypt/live/$VPNHOST/cert.pem    /etc/ipsec.d/certs/cert.pem
-ln -s /etc/letsencrypt/live/$VPNHOST/privkey.pem /etc/ipsec.d/private/privkey.pem
-ln -s /etc/letsencrypt/live/$VPNHOST/chain.pem   /etc/ipsec.d/cacerts/chain.pem
+ln -f -s /etc/letsencrypt/live/$VPNHOST/cert.pem    /etc/ipsec.d/certs/cert.pem
+ln -f -s /etc/letsencrypt/live/$VPNHOST/privkey.pem /etc/ipsec.d/private/privkey.pem
+ln -f -s /etc/letsencrypt/live/$VPNHOST/chain.pem   /etc/ipsec.d/cacerts/chain.pem
 
-echo "/etc/letsencrypt/archive/${VPNHOST}/* r," >> /etc/apparmor.d/local/usr.lib.ipsec.charon
+grep -Fq 'jawj/IKEv2-setup' /etc/apparmor.d/local/usr.lib.ipsec.charon || echo "
+# https://github.com/jawj/IKEv2-setup
+/etc/letsencrypt/archive/${VPNHOST}/* r,
+" >> /etc/apparmor.d/local/usr.lib.ipsec.charon
+
 aa-status --enabled && invoke-rc.d apparmor reload
 
 
 echo
-echo "=== Configuring VPN ==="
+echo "--- Configuring VPN ---"
 echo
 
 # ip_forward is for VPN
 # ip_no_pmtu_disc is for UDP fragmentation
 # others are for security
 
-echo '
+grep -Fq 'jawj/IKEv2-setup' /etc/sysctl.conf || echo '
+# https://github.com/jawj/IKEv2-setup
 net.ipv4.ip_forward = 1
 net.ipv4.ip_no_pmtu_disc = 1
 net.ipv4.conf.all.rp_filter = 1
 net.ipv4.conf.all.accept_redirects = 0
 net.ipv4.conf.all.send_redirects = 0
-
 net.ipv6.conf.all.disable_ipv6 = 1
 net.ipv6.conf.default.disable_ipv6 = 1
 net.ipv6.conf.lo.disable_ipv6 = 1
@@ -184,12 +214,11 @@ sysctl -p
 
 # these ike and esp settings are tested on Mac 10.12, iOS 10 and Windows 10
 # iOS/Mac with appropriate configuration profiles use AES_GCM_16_256/PRF_HMAC_SHA2_256/ECP_521 
-# Windows 10 uses AES_CBC_256/HMAC_SHA2_256_128/PRF_HMAC_SHA2_256/MODP_1024 
+# Windows 10 uses AES_CBC_256/HMAC_SHA2_256_128/PRF_HMAC_SHA2_256/ECP_384 
 
 echo "config setup
   strictcrlpolicy=yes
-  uniqueids=no
-
+  uniqueids=never
 conn roadwarrior
   auto=add
   compress=no
@@ -197,8 +226,8 @@ conn roadwarrior
   keyexchange=ikev2
   fragmentation=yes
   forceencaps=yes
-  ike=aes256gcm16-sha256-ecp521,aes256-sha256-modp1024!
-  esp=aes256gcm16-sha256,aes256-sha1!
+  ike=aes256gcm16-sha256-ecp521,aes256-sha256-ecp384!
+  esp=aes256gcm16-sha256!
   dpdaction=clear
   dpddelay=180s
   rekey=no
@@ -225,12 +254,12 @@ ipsec restart
 
 
 echo
-echo "=== User ==="
+echo "--- User ---"
 echo
 
 # user + SSH
 
-adduser --disabled-password --gecos "" $LOGINUSERNAME
+id -u $LOGINUSERNAME &>/dev/null || adduser --disabled-password --gecos "" $LOGINUSERNAME
 echo "${LOGINUSERNAME}:${LOGINPASSWORD}" | chpasswd
 adduser ${LOGINUSERNAME} sudo
 
@@ -242,7 +271,8 @@ sed -r \
 -e 's/^#?UsePAM yes$/UsePAM no/' \
 -i.original /etc/ssh/sshd_config
 
-echo "
+grep -Fq 'jawj/IKEv2-setup' /etc/ssh/sshd_config || echo "
+# https://github.com/jawj/IKEv2-setup
 MaxStartups 1
 MaxAuthTries 2
 UseDNS no" >> /etc/ssh/sshd_config
@@ -251,7 +281,7 @@ service ssh restart
 
 
 echo
-echo "=== Timezone, mail, unattended upgrades ==="
+echo "--- Timezone, mail, unattended upgrades ---"
 echo
 
 timedatectl set-timezone $TZONE
@@ -263,7 +293,9 @@ sed -r \
 -e 's/^inet_interfaces =.*$/inet_interfaces = loopback-only/' \
 -i.original /etc/postfix/main.cf
 
-echo "root: ${EMAIL}
+grep -Fq 'jawj/IKEv2-setup' /etc/aliases || echo "
+# https://github.com/jawj/IKEv2-setup
+root: ${EMAIL}
 ${LOGINUSERNAME}: ${EMAIL}
 " >> /etc/aliases
 
@@ -287,12 +319,14 @@ APT::Periodic::Unattended-Upgrade "1";
 
 service unattended-upgrades restart
 
-
 echo
-echo "=== Creating Apple .mobileconfig file ==="
+echo "--- Creating configuration files ---"
 echo
 
-echo "<?xml version='1.0' encoding='UTF-8'?>
+cd /home/${LOGINUSERNAME}
+
+cat << EOF > vpn-ios-or-mac.mobileconfig
+<?xml version='1.0' encoding='UTF-8'?>
 <!DOCTYPE plist PUBLIC '-//Apple//DTD PLIST 1.0//EN' 'http://www.apple.com/DTDs/PropertyList-1.0.dtd'>
 <plist version='1.0'>
 <dict>
@@ -380,13 +414,13 @@ echo "<?xml version='1.0' encoding='UTF-8'?>
         <integer>0</integer>
       </dict>
       <key>UserDefinedName</key>
-      <string>IKEv2 VPN</string>
+      <string>${VPNHOST}</string>
       <key>VPNType</key>
       <string>IKEv2</string>
     </dict>
   </array>
   <key>PayloadDisplayName</key>
-  <string>IKEv2 VPN configuration</string>
+  <string>IKEv2 VPN configuration (${VPNHOST})</string>
   <key>PayloadIdentifier</key>
   <string>com.mackerron.vpn.$(uuidgen)</string>
   <key>PayloadRemovalDisallowed</key>
@@ -399,12 +433,120 @@ echo "<?xml version='1.0' encoding='UTF-8'?>
   <integer>1</integer>
 </dict>
 </plist>
-" > vpn.mobileconfig
+EOF
 
-echo 'Your IKEv2 VPN configuration profile for iOS and macOS is attached. Please double-click to install. You will need your device PIN or password, plus your VPN username and password.
-' | mail -s "VPN configuration profile" -A vpn.mobileconfig $EMAIL
+cat << EOF > vpn-ubuntu-client.sh
+#!/bin/bash -e
+if [[ \$(id -u) -ne 0 ]]; then echo "Please run as root (e.g. sudo ./path/to/this/script)"; exit 1; fi
+
+read -p "VPN username (same as entered on server): " VPNUSERNAME
+while true; do
+read -s -p "VPN password (same as entered on server): " VPNPASSWORD
+echo
+read -s -p "Confirm VPN password: " VPNPASSWORD2
+echo
+[ "\$VPNPASSWORD" = "\$VPNPASSWORD2" ] && break
+echo "Passwords didn't match -- please try again"
+done
+
+apt-get install -y strongswan libstrongswan-standard-plugins libcharon-extra-plugins
+apt-get install -y libcharon-standard-plugins || true  # 17.04+ only
+
+ln -f -s /etc/ssl/certs/DST_Root_CA_X3.pem /etc/ipsec.d/cacerts/
+
+grep -Fq 'jawj/IKEv2-setup' /etc/ipsec.conf || echo "
+# https://github.com/jawj/IKEv2-setup
+conn ikev2vpn
+        ikelifetime=60m
+        keylife=20m
+        rekeymargin=3m
+        keyingtries=1
+        keyexchange=ikev2
+        ike=aes256gcm16-sha256-ecp521!
+        esp=aes256gcm16-sha256!
+        leftsourceip=%config
+        leftauth=eap-mschapv2
+        eap_identity=\${VPNUSERNAME}
+        right=${VPNHOST}
+        rightauth=pubkey
+        rightid=@${VPNHOST}
+        rightsubnet=0.0.0.0/0
+        auto=add  # or auto=start to bring up automatically
+" >> /etc/ipsec.conf
+
+grep -Fq 'jawj/IKEv2-setup' /etc/ipsec.secrets || echo "
+# https://github.com/jawj/IKEv2-setup
+\${VPNUSERNAME} %any : EAP \"\${VPNPASSWORD}\"
+" >> /etc/ipsec.secrets
+
+ipsec restart
+sleep 5  # is there a better way?
+
+echo "Bringing up VPN ..."
+ipsec up ikev2vpn
+ipsec statusall
+
+echo
+echo -n "Testing IP address ... "
+VPNIP=\$(dig -4 +short ${VPNHOST})
+ACTUALIP=\$(curl -s ifconfig.co)
+if [[ "\$VPNIP" == "\$ACTUALIP" ]]; then echo "PASSED (IP: \${VPNIP})"; else echo "FAILED (IP: \${ACTUALIP}, VPN IP: \${VPNIP})"; fi
+
+echo
+echo "To disconnect: ipsec down ikev2vpn"
+echo "To resconnect: ipsec up ikev2vpn"
+echo "To connect automatically: change auto=add to auto=start in /etc/ipsec.conf"
+EOF
+
+cat << EOF > vpn-instructions.txt
+== iOS and macOS ==
+
+A configuration profile is attached as vpn-ios-or-mac.mobileconfig — simply open this to install. You will be asked for your device PIN or password, and your VPN username and password, not necessarily in that order.
+
+
+== Windows ==
+
+You will need Windows 10 Pro or above. Please run the following commands in PowerShell:
+
+Add-VpnConnection -Name "${VPNHOST}" \`
+  -ServerAddress "${VPNHOST}" \`
+  -TunnelType IKEv2 \`
+  -EncryptionLevel Maximum \`
+  -AuthenticationMethod EAP
+
+Set-VpnConnectionIPsecConfiguration -ConnectionName "${VPNHOST}" \`
+  -AuthenticationTransformConstants GCMAES256 \`
+  -CipherTransformConstants GCMAES256 \`
+  -EncryptionMethod AES256 \`
+  -IntegrityCheckMethod SHA256 \`
+  -DHGroup ECP384 \`
+  -PfsGroup ECP384 \`
+  -Force
+
+
+== Android ==
+
+Download the strongSwan app from the Play Store: https://play.google.com/store/apps/details?id=org.strongswan.android
+
+Server: ${VPNHOST}
+VPN Type: IKEv2 EAP (Username/Password)
+Username and password: as configured on the server
+CA certificate: Select automatically
+
+
+== Ubuntu ==
+
+A bash script to set up strongSwan as a VPN client is attached as vpn-ubuntu-client.sh. You will need to chmod +x and then run the script as root.
+
+EOF
+
+cat vpn-instructions.txt | mail -r $USER@$VPNHOST -s "VPN configuration" -A vpn-ios-or-mac.mobileconfig -A vpn-ubuntu-client.sh $EMAIL
+
+echo
+echo "--- How to connect ---"
+echo
+echo "Connection instructions have been emailed to you, and can also be found in your home directory, /home/${LOGINUSERNAME}"
 
 # necessary for IKEv2?
 # Windows: https://support.microsoft.com/en-us/kb/926179
 # HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Services\PolicyAgent += AssumeUDPEncapsulationContextOnSendRule, DWORD = 2
-
